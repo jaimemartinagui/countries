@@ -1,1 +1,3 @@
-# countries
+# Countries
+
+![Countries](/img/countries.jpg)
