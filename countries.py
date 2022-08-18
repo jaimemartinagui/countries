@@ -6,11 +6,11 @@ import json
 import time
 import random
 import datetime
-import requests
 import multiprocessing
-from unidecode import unidecode
 
 import regex
+import requests
+from unidecode import unidecode
 
 from decorators import try_n_times
 from database_connection import DatabaseConnection
