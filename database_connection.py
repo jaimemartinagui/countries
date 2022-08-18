@@ -7,9 +7,7 @@ import psycopg2
 from config.config import DATABASE_CONN
 
 class DatabaseConnection:
-    """
-    Clase para la conexion con la base de datos PostgreSQL.
-    """
+    """Clase para la conexion con la base de datos PostgreSQL."""
 
     def __init__(self, autocommit=True):
 
