@@ -21,38 +21,35 @@ class Countries():
     """Clase con la implementacion del juego."""
 
     def __init__(self, data_path, players, init_time_limit, number_of_questions, response_time_limit, 
-                 n_par, tokens, chat_ids, second_turn=False):
+                 n_par, tokens, chat_ids):
 
         self.data_path           = data_path
-        self.players             = self._get_second_turn_players() if second_turn else players
+        self.players             = players
         self.init_time_limit     = init_time_limit
         self.number_of_questions = number_of_questions
         self.response_time_limit = response_time_limit
         self.n_par               = n_par
         self.tokens              = tokens
         self.chat_ids            = chat_ids
-        self.second_turn         = second_turn
         random.shuffle(self.players)
 
-        self.second_turn_players = []
-
-    def run_countries(self):
+    def run_countries(self, second_turn=False):
         """Metodo que ejecuta la app y se asegura de que se cierre la conexion con la base de datos."""
 
         try:
-            self._run_countries()
+            self._run_countries(second_turn)
         finally:
             if hasattr(self, 'database_conn'):
                 self.database_conn.close_connection()
 
-    def _run_countries(self):
+    def _run_countries(self, second_turn):
         """Metodo principal que ejecuta la aplicacion."""
 
         countries = self._load_data()
-
-        args    = [(countries, player) for player in self.players]
-        pool    = multiprocessing.Pool(processes=self.n_par)
-        results = pool.starmap(self._player_execution, args)
+        players   = self._get_second_turn_players() if second_turn else self.players
+        args      = [(countries, player, second_turn) for player in players]
+        pool      = multiprocessing.Pool(processes=self.n_par)
+        results   = pool.starmap(self._player_execution, args)
 
         self.database_conn = DatabaseConnection()
         self.cur           = self.database_conn.get_cursor()
@@ -60,21 +57,21 @@ class Countries():
         self._add_players_to_database()
         self._update_player_points(results)
         self._generate_table_backup()
-        self._update_second_turn_players_list(results)
-        self._update_second_turn_table()
-        self._send_closing_message()
+        self._update_second_turn_table(second_turn, results)
+        if second_turn:
+            self._send_closing_message()
 
-    def _player_execution(self, countries, player):
-        """Metodo para ejecutar el juego para un unico jugador y paralelizarlo."""
+    def _player_execution(self, countries, player, second_turn):
+        """Metodo para ejecutar el juego para un unico jugador y poder paralelizarlo."""
 
         token   = self.tokens[player]
         chat_id = self.chat_ids[player]
         self._send_welcome_message(token, chat_id, player)
 
         if self._wait_for_response(token, self.init_time_limit) is None:
-            msg = "Ha perdido ambos turnos. Hasta mañana!" if self.second_turn else "Ha perdido el primer turno. Hasta luego!"
+            msg = "Ha perdido ambos turnos. Hasta mañana!" if second_turn else "Ha perdido el primer turno. Hasta luego!"
             self._send_telegram_msg(token, chat_id, msg)
-            return (player, None)
+            return player, None
 
         already_asked = []
         daily_points  = 0
@@ -107,7 +104,7 @@ class Countries():
 
         self._send_telegram_msg(token, chat_id, f"FIN! Hoy ha sumado {daily_points} puntos.")
 
-        return (player, daily_points)
+        return player, daily_points
 
     def _load_data(self):
         """Metodo para cargar el fichero json de datos."""
@@ -184,6 +181,17 @@ class Countries():
 
         return points
 
+    def _get_second_turn_players(self):
+        """Metodo para obtener la lista de jugadores para la ejecucion del segundo turno."""
+
+        tmp_database_conn = DatabaseConnection()
+        tmp_cur           = tmp_database_conn.get_cursor()
+        tmp_cur.execute("SELECT jugador FROM second_turn;")
+        players_list = [player_tuple[0] for player_tuple in tmp_cur.fetchall()]
+        tmp_database_conn.close_connection()
+
+        return players_list
+
     def _add_players_to_database(self):
         """Metodo para incluir los jugadores que falten en la tabla de clasificacion."""
 
@@ -198,24 +206,12 @@ class Countries():
         if values_to_insert:
             self.cur.execute(f"INSERT INTO classification (jugador, puntos) VALUES {values_to_insert[:-2]};")
 
-    def _get_second_turn_players(self):
-        """Metodo para obtener la lista de jugadores para la ejecucion del sgundo turno."""
-
-        tmp_database_conn = DatabaseConnection()
-        tmp_cur           = tmp_database_conn.get_cursor()
-        tmp_cur.execute("SELECT jugador FROM second_turn;")
-        players_list = [player_tuple[0] for player_tuple in tmp_cur.fetchall()]
-        tmp_database_conn.close_connection()
-
-        return players_list
-
     def _update_player_points(self, results):
-        """Metodo para actualizar los puntos del jugador."""
+        """Metodo para actualizar los puntos de todos los jugadores."""
 
-        for result in results:
-            if result[1] is not None:
-                self.cur.execute(f"SELECT puntos FROM classification WHERE jugador = '{result[0]}'")
-                self.cur.execute(f"UPDATE classification SET puntos = '{self.cur.fetchone()[0] + result[1]}' WHERE jugador = '{result[0]}'")
+        for player, points in filter(lambda x: x[1] is not None, results):
+            self.cur.execute(f"SELECT puntos FROM classification WHERE jugador = '{player}'")
+            self.cur.execute(f"UPDATE classification SET puntos = '{self.cur.fetchone()[0] + points}' WHERE jugador = '{player}'")
 
     def _generate_table_backup(self):
         """Metodo para crear un backup de la tabla de clasificacion."""
@@ -223,24 +219,21 @@ class Countries():
         self.cur.execute("DROP TABLE IF EXISTS classification_backup;")
         self.cur.execute("CREATE TABLE classification_backup AS (SELECT * FROM classification WHERE 1=1);")
 
-    def _update_second_turn_players_list(self, results):
-        """Metodo que actualiza la lista de jugadores que deben estar en el segundo turno."""
-
-        for player, result in results:
-            if result is None:
-                self.second_turn_players.append(player)
-
-    def _update_second_turn_table(self):
+    def _update_second_turn_table(self, second_turn, results):
         """Metodo para actualizar la tabla que contiene los jugadores para la segunda ejecucion."""
 
-        if self.second_turn:
+        if second_turn:
             self.cur.execute("DELETE FROM second_turn WHERE 1=1;")
-        else:
-            if self.second_turn_players:
-                values_to_insert = ""
-                for player in self.second_turn_players:
-                    values_to_insert += f"('{player}'), "
-                self.cur.execute(f"INSERT INTO second_turn (jugador) VALUES {values_to_insert[:-2]};")
+        elif players_who_skipped_first_turn := self._get_players_who_skipped_first_turn(results):
+            values_to_insert = ""
+            for player in players_who_skipped_first_turn:
+                values_to_insert += f"('{player}'), "
+            self.cur.execute(f"INSERT INTO second_turn (jugador) VALUES {values_to_insert[:-2]};")
+
+    def _get_players_who_skipped_first_turn(self, results):
+        """Metodo que devuelve los jugadores que se han saltado el primer turno."""
+
+        return [result[0] for result in filter(lambda x: x[1] is None, results)]
 
     def _send_closing_message(self):
         """Metodo para enviar el mensaje con la clasificacion."""
@@ -248,9 +241,7 @@ class Countries():
         classification     = self._get_classification()
         classification_msg = self._get_classification_msg(classification)
         for player in self.players:
-            token   = self.tokens[player]
-            chat_id = self.chat_ids[player]
-            self._send_telegram_msg(token, chat_id, 
+            self._send_telegram_msg(self.tokens[player], self.chat_ids[player], 
                 f'CLASIFICACIÓN\n-----------------------------\n{classification_msg[:-1]}\n-----------------------------\n\n' + 
                 f'{classification[0][0]} va en cabeza.\n{classification[-1][0]} ponte las pilas...\n\n' + 
                 f'Hasta manaña!\n\n' + 
@@ -277,7 +268,7 @@ if __name__ == '__main__':
 
     countries = Countries(
         DATA_PATH, PLAYERS, INIT_TIME_LIMIT, NUMBER_OF_QUESTIONS, 
-        RESPONSE_TIME_LIMIT, N_PAR, TOKENS, CHAT_IDS, SECOND_TURN
+        RESPONSE_TIME_LIMIT, N_PAR, TOKENS, CHAT_IDS
     )
 
-    countries.run_countries()
+    countries.run_countries(second_turn=SECOND_TURN)
