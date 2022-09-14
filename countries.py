@@ -45,11 +45,12 @@ class Countries():
     def _run_countries(self, second_turn):
         """Metodo principal que ejecuta la aplicacion."""
 
-        countries = self._load_data()
-        players   = self._get_second_turn_players() if second_turn else self.players
-        args      = [(countries, player, second_turn) for player in players]
-        pool      = multiprocessing.Pool(processes=self.n_par)
-        results   = pool.starmap(self._player_execution, args)
+        countries        = self._load_data()
+        countries_sample = [(random.randint(0, 3), country) for country in random.sample(countries, self.number_of_questions)]
+        players          = self._get_second_turn_players() if second_turn else self.players
+        args             = [(countries_sample, player, second_turn) for player in players]
+        pool             = multiprocessing.Pool(processes=self.n_par)
+        results          = pool.starmap(self._player_execution, args)
 
         self.database_conn = DatabaseConnection()
         self.cur           = self.database_conn.get_cursor()
@@ -61,7 +62,7 @@ class Countries():
         if second_turn:
             self._send_closing_message()
 
-    def _player_execution(self, countries, player, second_turn):
+    def _player_execution(self, countries_sample, player, second_turn):
         """Metodo para ejecutar el juego para un unico jugador y poder paralelizarlo."""
 
         token   = self.tokens[player]
@@ -73,15 +74,11 @@ class Countries():
             self._send_telegram_msg(token, chat_id, msg)
             return player, None
 
-        already_asked = []
         daily_points  = 0
 
-        for i in range(self.number_of_questions):
+        for i, (question, country) in enumerate(countries_sample):
 
-            country = random.choice([country for country in countries if country['Country'] not in already_asked])
-            already_asked.append(country['Country'])
-
-            if random.randint(0, 3) < 3:
+            if question < 3:
                 self._send_telegram_msg(token, chat_id, f"{i + 1}. Capital de {country['Country']}?")
                 answer = country['Capital']
             else:
