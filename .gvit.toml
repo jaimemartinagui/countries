@@ -1,0 +1,5 @@
+
+[gvit]
+python = "3.13"
+deps_path = "requirements.txt"
+
